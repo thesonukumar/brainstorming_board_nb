@@ -68,5 +68,7 @@ async def login(payload: LoginRequest):
     user = await users.find_one({"email": payload.email})
     if not user or not verify_password(payload.password, user.get("passwordHash", "")):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-    token = create_access_token(user.get("id") or user.get("_id"))
+    # Ensure JWT subject is a string; Mongo _id may be an ObjectId
+    subject = user.get("id") or user.get("_id")
+    token = create_access_token(str(subject))
     return TokenResponse(token=token)
