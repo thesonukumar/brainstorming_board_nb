@@ -4,7 +4,7 @@ from ..deps import get_current_user
 from typing import Dict, Any
 import uuid
 from ..db import get_db
-from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo.database import Database
 
 router = APIRouter(prefix="/boards", tags=["boards"]) 
 
@@ -27,16 +27,16 @@ def default_board_for(user_id: str) -> Dict[str, Any]:
         }
     return BOARDS_MEM[user_id]
 
-async def try_get_db() -> AsyncIOMotorDatabase | None:
+async def try_get_db() -> Database | None:
     try:
         return await get_db()
     except Exception:
         return None
 
-async def get_or_create_board_db(db: AsyncIOMotorDatabase, user_id: str) -> Dict[str, Any]:
+def get_or_create_board_db(db: Database, user_id: str) -> Dict[str, Any]:
     boards = db["boards"]
     board_id = f"board_{user_id}"
-    doc = await boards.find_one({"_id": board_id})
+    doc = boards.find_one({"_id": board_id})
     if not doc:
         doc = {
             "_id": board_id,
@@ -48,7 +48,7 @@ async def get_or_create_board_db(db: AsyncIOMotorDatabase, user_id: str) -> Dict
             "cards": [],
             "folders": [],
         }
-        await boards.insert_one(doc)
+        boards.insert_one(doc)
     # Migrate any existing boards to single "Ideas" column
     else:
         cols = doc.get("columns", [])
@@ -61,7 +61,7 @@ async def get_or_create_board_db(db: AsyncIOMotorDatabase, user_id: str) -> Dict
                 c["columnId"] = "col_ideas"
                 c["position"] = i
             doc["cards"] = cards_sorted
-            await boards.update_one({"_id": board_id}, {"$set": {"columns": doc["columns"], "cards": doc["cards"]}})
+            boards.update_one({"_id": board_id}, {"$set": {"columns": doc["columns"], "cards": doc["cards"]}})
     return doc
 
 @router.get("/me", response_model=Board, response_model_by_alias=True)
@@ -69,7 +69,7 @@ async def get_my_board(user=Depends(get_current_user)):
     # Prefer Mongo if configured
     db = await try_get_db()
     if db is not None:
-        doc = await get_or_create_board_db(db, user["userId"])  # type: ignore
+        doc = get_or_create_board_db(db, user["userId"])  # type: ignore
         return doc
     # Fallback to in-memory
     return default_board_for(user["userId"])  # type: ignore
@@ -79,7 +79,7 @@ async def reorder(boardId: str, payload: ReorderRequest, user=Depends(get_curren
     db = await try_get_db()
     if db is not None:
         boards = db["boards"]
-        doc = await boards.find_one({"_id": boardId, "userId": user["userId"]})
+        doc = boards.find_one({"_id": boardId, "userId": user["userId"]})
         if not doc:
             return {"status": "error", "detail": "Board not found"}
         cards = doc.get("cards", [])
@@ -105,7 +105,7 @@ async def reorder(boardId: str, payload: ReorderRequest, user=Depends(get_curren
         sort_and_reindex(src_col)
         if dst_col != src_col:
             sort_and_reindex(dst_col)
-        await boards.update_one({"_id": boardId}, {"$set": {"cards": cards}})
+        boards.update_one({"_id": boardId}, {"$set": {"cards": cards}})
         return {"status": "ok"}
 
 # --- New: Folder update/delete ---
@@ -117,7 +117,7 @@ async def update_folder(boardId: str, folderId: str, payload: dict, user=Depends
     color = payload.get("color")
     if db is not None:
         boards = db["boards"]
-        doc = await boards.find_one({"_id": boardId, "userId": user["userId"]})
+        doc = boards.find_one({"_id": boardId, "userId": user["userId"]})
         if not doc:
             return {"status": "error", "detail": "Board not found"}
         folders = doc.get("folders", [])
@@ -128,7 +128,7 @@ async def update_folder(boardId: str, folderId: str, payload: dict, user=Depends
                 if color is not None:
                     f["color"] = color
                 break
-        await boards.update_one({"_id": boardId}, {"$set": {"folders": folders}})
+        boards.update_one({"_id": boardId}, {"$set": {"folders": folders}})
         return {"status": "ok"}
     # In-memory fallback
     board = default_board_for(user["userId"])  # type: ignore
@@ -149,7 +149,7 @@ async def delete_folder(boardId: str, folderId: str, user=Depends(get_current_us
     db = await try_get_db()
     if db is not None:
         boards = db["boards"]
-        doc = await boards.find_one({"_id": boardId, "userId": user["userId"]})
+        doc = boards.find_one({"_id": boardId, "userId": user["userId"]})
         if not doc:
             return {"status": "error", "detail": "Board not found"}
         folders = [f for f in doc.get("folders", []) if f.get("_id") != folderId]
@@ -157,7 +157,7 @@ async def delete_folder(boardId: str, folderId: str, user=Depends(get_current_us
         for c in cards:
             if c.get("folderId") == folderId:
                 c.pop("folderId", None)
-        await boards.update_one({"_id": boardId}, {"$set": {"folders": folders, "cards": cards}})
+        boards.update_one({"_id": boardId}, {"$set": {"folders": folders, "cards": cards}})
         return {"status": "ok"}
     # In-memory fallback
     board = default_board_for(user["userId"])  # type: ignore
@@ -178,7 +178,7 @@ async def update_card(boardId: str, cardId: str, payload: dict, user=Depends(get
     folderId = payload.get("folderId") if "folderId" in payload else None
     if db is not None:
         boards = db["boards"]
-        doc = await boards.find_one({"_id": boardId, "userId": user["userId"]})
+        doc = boards.find_one({"_id": boardId, "userId": user["userId"]})
         if not doc:
             return {"status": "error", "detail": "Board not found"}
         cards = doc.get("cards", [])
@@ -192,7 +192,7 @@ async def update_card(boardId: str, cardId: str, payload: dict, user=Depends(get
                     else:
                         c.pop("folderId", None)
                 break
-        await boards.update_one({"_id": boardId}, {"$set": {"cards": cards}})
+        boards.update_one({"_id": boardId}, {"$set": {"cards": cards}})
         return {"status": "ok"}
     # In-memory fallback
     board = default_board_for(user["userId"])  # type: ignore
@@ -216,14 +216,14 @@ async def delete_card(boardId: str, cardId: str, user=Depends(get_current_user))
     db = await try_get_db()
     if db is not None:
         boards = db["boards"]
-        doc = await boards.find_one({"_id": boardId, "userId": user["userId"]})
+        doc = boards.find_one({"_id": boardId, "userId": user["userId"]})
         if not doc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Board not found")
         cards = doc.get("cards", [])
         if not any(c.get("_id") == cardId for c in cards):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Card not found")
         cards = [c for c in cards if c.get("_id") != cardId]
-        await boards.update_one({"_id": boardId}, {"$set": {"cards": cards}})
+        boards.update_one({"_id": boardId}, {"$set": {"cards": cards}})
         return {"status": "ok"}
     # In-memory fallback
     board = default_board_for(user["userId"])  # type: ignore
@@ -239,7 +239,7 @@ async def create_card(boardId: str, payload: CreateCardRequest, user=Depends(get
     db = await try_get_db()
     if db is not None:
         boards = db["boards"]
-        doc = await boards.find_one({"_id": boardId, "userId": user["userId"]})
+        doc = boards.find_one({"_id": boardId, "userId": user["userId"]})
         if not doc:
             return {"status": "error", "detail": "Board not found"}
         cards = doc.get("cards", [])
@@ -252,7 +252,7 @@ async def create_card(boardId: str, payload: CreateCardRequest, user=Depends(get
             "position": next_pos,
         }
         cards.append(new_card)
-        await boards.update_one({"_id": boardId}, {"$set": {"cards": cards}})
+        boards.update_one({"_id": boardId}, {"$set": {"cards": cards}})
         return {"status": "ok", "card": new_card}
     # In-memory fallback
     board = default_board_for(user["userId"])  # type: ignore
@@ -278,12 +278,12 @@ async def create_folder(boardId: str, payload: dict, user=Depends(get_current_us
     new_folder = {"_id": "fld_" + uuid.uuid4().hex[:6], "name": name, "color": color}
     if db is not None:
         boards = db["boards"]
-        doc = await boards.find_one({"_id": boardId, "userId": user["userId"]})
+        doc = boards.find_one({"_id": boardId, "userId": user["userId"]})
         if not doc:
             return {"status": "error", "detail": "Board not found"}
         folders = doc.get("folders", [])
         folders.append(new_folder)
-        await boards.update_one({"_id": boardId}, {"$set": {"folders": folders}})
+        boards.update_one({"_id": boardId}, {"$set": {"folders": folders}})
         return {"status": "ok", "folder": new_folder}
     # In-memory fallback
     board = default_board_for(user["userId"])  # type: ignore
@@ -298,14 +298,14 @@ async def assign_cards_to_folder(boardId: str, folderId: str, payload: dict, use
     card_ids = payload.get("cardIds", [])
     if db is not None:
         boards = db["boards"]
-        doc = await boards.find_one({"_id": boardId, "userId": user["userId"]})
+        doc = boards.find_one({"_id": boardId, "userId": user["userId"]})
         if not doc:
             return {"status": "error", "detail": "Board not found"}
         cards = doc.get("cards", [])
         for c in cards:
             if c.get("_id") in card_ids:
                 c["folderId"] = folderId
-        await boards.update_one({"_id": boardId}, {"$set": {"cards": cards}})
+        boards.update_one({"_id": boardId}, {"$set": {"cards": cards}})
         return {"status": "ok"}
     # In-memory fallback
     board = default_board_for(user["userId"])  # type: ignore

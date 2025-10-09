@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo.database import Database
 from ..schemas import SignupRequest, LoginRequest, TokenResponse
 from ..security import hash_password, verify_password, create_access_token
 from ..db import get_db
@@ -10,12 +10,12 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 # In-memory fallback if Mongo not configured
 USERS_MEM: dict[str, dict] = {}
 
-async def get_users_collection(db: AsyncIOMotorDatabase | None):
+async def get_users_collection(db: Database | None):
     if db is None:
         return None
     return db["users"]
 
-async def try_get_db() -> AsyncIOMotorDatabase | None:
+async def try_get_db() -> Database | None:
     try:
         return await get_db()
     except Exception:
@@ -40,7 +40,7 @@ async def signup(payload: SignupRequest):
         return TokenResponse(token=token)
 
     # With Mongo
-    existing = await users.find_one({"email": payload.email})
+    existing = users.find_one({"email": payload.email})
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
     user_id = "u_" + uuid.uuid4().hex[:12]
@@ -49,7 +49,7 @@ async def signup(payload: SignupRequest):
         "email": payload.email,
         "passwordHash": hash_password(payload.password),
     }
-    await users.insert_one(doc)
+    users.insert_one(doc)
     token = create_access_token(user_id)
     return TokenResponse(token=token)
 
@@ -65,7 +65,7 @@ async def login(payload: LoginRequest):
         token = create_access_token(user["id"])  # sub is userId
         return TokenResponse(token=token)
 
-    user = await users.find_one({"email": payload.email})
+    user = users.find_one({"email": payload.email})
     if not user or not verify_password(payload.password, user.get("passwordHash", "")):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     # Ensure JWT subject is a string; Mongo _id may be an ObjectId

@@ -54,9 +54,9 @@ async def _load_board(board_id: str, user_id: str) -> dict:
     db = await try_get_db()
     if db is not None:
         boards = db["boards"]
-        board = await boards.find_one({"_id": board_id, "userId": user_id})
+        board = boards.find_one({"_id": board_id, "userId": user_id})
         if not board:
-            board = await get_or_create_board_db(db, user_id)  # type: ignore
+            board = get_or_create_board_db(db, user_id)  # type: ignore
     else:
         board = default_board_for(user_id)  # type: ignore
     return board
@@ -73,7 +73,15 @@ async def _summarize_with_gemini(cards: list) -> Optional[str]:
     """Generate summary using Gemini API."""
     try:
         prompt = (
-            "Summarize these brainstorming ideas into key themes and next steps, provide response in plain text, DO NOT USE MARKDOWN.\n\n"
+            """
+            You will be provided with a list of brainstorming ideas. 
+            You have to do:
+            - Provide 2-3 new related idea suggestions based on the provided ones. (HEADING: Seggestions)
+            - Give a grouped abstartact name for the ideas. Like a title for the provided ideas. (HEADING: Title)
+            - Provide a 2-3 line sumamry for the provided ideas (Key themes, top ideas, next steps). (HEADING: Summary)
+            
+            DO NOT USE MARKDOWN.\n\n
+            """
             + "\n".join(f"- {c.get('content','')}" for c in cards)
         )
         # Use google-generativeai SDK
