@@ -73,7 +73,7 @@ async def _summarize_with_gemini(cards: list) -> Optional[str]:
     """Generate summary using Gemini API."""
     try:
         prompt = (
-            "Summarize these brainstorming ideas into key themes and next steps, provide response in plain text.\n\n"
+            "Summarize these brainstorming ideas into key themes and next steps, provide response in plain text, DO NOT USE MARKDOWN.\n\n"
             + "\n".join(f"- {c.get('content','')}" for c in cards)
         )
         # Use google-generativeai SDK

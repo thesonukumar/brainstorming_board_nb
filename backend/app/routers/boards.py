@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from ..schemas import Board, ReorderRequest, CreateCardRequest
 from ..deps import get_current_user
 from typing import Dict, Any
@@ -107,25 +107,131 @@ async def reorder(boardId: str, payload: ReorderRequest, user=Depends(get_curren
             sort_and_reindex(dst_col)
         await boards.update_one({"_id": boardId}, {"$set": {"cards": cards}})
         return {"status": "ok"}
+
+# --- New: Folder update/delete ---
+@router.patch("/{boardId}/folders/{folderId}")
+async def update_folder(boardId: str, folderId: str, payload: dict, user=Depends(get_current_user)):
+    """Rename or recolor a folder."""
+    db = await try_get_db()
+    name = payload.get("name")
+    color = payload.get("color")
+    if db is not None:
+        boards = db["boards"]
+        doc = await boards.find_one({"_id": boardId, "userId": user["userId"]})
+        if not doc:
+            return {"status": "error", "detail": "Board not found"}
+        folders = doc.get("folders", [])
+        for f in folders:
+            if f.get("_id") == folderId:
+                if name is not None:
+                    f["name"] = name
+                if color is not None:
+                    f["color"] = color
+                break
+        await boards.update_one({"_id": boardId}, {"$set": {"folders": folders}})
+        return {"status": "ok"}
     # In-memory fallback
     board = default_board_for(user["userId"])  # type: ignore
-    cards = board["cards"]
-    card = next((c for c in cards if c["_id"] == payload.draggableId), None)
-    if not card:
-        return {"status": "error", "detail": "Card not found"}
-    src_col = payload.source.droppableId
-    dst_col = payload.destination.droppableId
-    if card["columnId"] != dst_col:
-        card["columnId"] = dst_col
-    def sort_and_reindex(col_id: str):
-        col_cards = [c for c in cards if c["columnId"] == col_id and c["_id"] != card["_id"]]
-        if col_id == dst_col:
-            col_cards.insert(payload.destination.index, card)
-        for i, c in enumerate(col_cards):
-            c["position"] = i
-    sort_and_reindex(src_col)
-    if dst_col != src_col:
-        sort_and_reindex(dst_col)
+    if board["_id"] != boardId:
+        return {"status": "error", "detail": "Board not found"}
+    for f in board.setdefault("folders", []):
+        if f["_id"] == folderId:
+            if name is not None:
+                f["name"] = name
+            if color is not None:
+                f["color"] = color
+            break
+    return {"status": "ok"}
+
+@router.delete("/{boardId}/folders/{folderId}")
+async def delete_folder(boardId: str, folderId: str, user=Depends(get_current_user)):
+    """Delete a folder and unset folderId for its cards."""
+    db = await try_get_db()
+    if db is not None:
+        boards = db["boards"]
+        doc = await boards.find_one({"_id": boardId, "userId": user["userId"]})
+        if not doc:
+            return {"status": "error", "detail": "Board not found"}
+        folders = [f for f in doc.get("folders", []) if f.get("_id") != folderId]
+        cards = doc.get("cards", [])
+        for c in cards:
+            if c.get("folderId") == folderId:
+                c.pop("folderId", None)
+        await boards.update_one({"_id": boardId}, {"$set": {"folders": folders, "cards": cards}})
+        return {"status": "ok"}
+    # In-memory fallback
+    board = default_board_for(user["userId"])  # type: ignore
+    if board["_id"] != boardId:
+        return {"status": "error", "detail": "Board not found"}
+    board["folders"] = [f for f in board.get("folders", []) if f["_id"] != folderId]
+    for c in board.get("cards", []):
+        if c.get("folderId") == folderId:
+            c.pop("folderId", None)
+    return {"status": "ok"}
+
+# --- New: Card update/delete ---
+@router.patch("/{boardId}/cards/{cardId}")
+async def update_card(boardId: str, cardId: str, payload: dict, user=Depends(get_current_user)):
+    """Update card content (and optionally folder assignment)."""
+    db = await try_get_db()
+    content = payload.get("content")
+    folderId = payload.get("folderId") if "folderId" in payload else None
+    if db is not None:
+        boards = db["boards"]
+        doc = await boards.find_one({"_id": boardId, "userId": user["userId"]})
+        if not doc:
+            return {"status": "error", "detail": "Board not found"}
+        cards = doc.get("cards", [])
+        for c in cards:
+            if c.get("_id") == cardId:
+                if content is not None:
+                    c["content"] = content
+                if "folderId" in payload:
+                    if folderId:
+                        c["folderId"] = folderId
+                    else:
+                        c.pop("folderId", None)
+                break
+        await boards.update_one({"_id": boardId}, {"$set": {"cards": cards}})
+        return {"status": "ok"}
+    # In-memory fallback
+    board = default_board_for(user["userId"])  # type: ignore
+    if board["_id"] != boardId:
+        return {"status": "error", "detail": "Board not found"}
+    for c in board.get("cards", []):
+        if c["_id"] == cardId:
+            if content is not None:
+                c["content"] = content
+            if "folderId" in payload:
+                if folderId:
+                    c["folderId"] = folderId
+                else:
+                    c.pop("folderId", None)
+            break
+    return {"status": "ok"}
+
+@router.delete("/{boardId}/cards/{cardId}")
+async def delete_card(boardId: str, cardId: str, user=Depends(get_current_user)):
+    """Delete a card from the board."""
+    db = await try_get_db()
+    if db is not None:
+        boards = db["boards"]
+        doc = await boards.find_one({"_id": boardId, "userId": user["userId"]})
+        if not doc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Board not found")
+        cards = doc.get("cards", [])
+        if not any(c.get("_id") == cardId for c in cards):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Card not found")
+        cards = [c for c in cards if c.get("_id") != cardId]
+        await boards.update_one({"_id": boardId}, {"$set": {"cards": cards}})
+        return {"status": "ok"}
+    # In-memory fallback
+    board = default_board_for(user["userId"])  # type: ignore
+    if board["_id"] != boardId:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Board not found")
+    if not any(c.get("_id") == cardId for c in board.get("cards", [])):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Card not found")
+    board["cards"] = [c for c in board.get("cards", []) if c["_id"] != cardId]
     return {"status": "ok"}
 
 @router.post("/{boardId}/cards")
