@@ -19,7 +19,10 @@ async def get_db() -> Database:
     # For mongodb+srv URIs, TLS is on by default; tlsCAFile ensures proper trust chain
     _client = MongoClient(
       MONGODB_URI,
+      tlsCAFile=certifi.where(),
       serverSelectionTimeoutMS=2000,
+      connectTimeoutMS=2000,
+      socketTimeoutMS=2000,
       server_api=ServerApi('1')
     )
     _db = _client[MONGODB_DB]

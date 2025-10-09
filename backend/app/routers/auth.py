@@ -1,74 +1,28 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from pymongo.database import Database
 from ..schemas import SignupRequest, LoginRequest, TokenResponse
 from ..security import hash_password, verify_password, create_access_token
-from ..db import get_db
+from sqlalchemy.orm import Session
+from ..sql import get_session, User
 import uuid
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-# In-memory fallback if Mongo not configured
-USERS_MEM: dict[str, dict] = {}
-
-async def get_users_collection(db: Database | None):
-    if db is None:
-        return None
-    return db["users"]
-
-async def try_get_db() -> Database | None:
-    try:
-        return await get_db()
-    except Exception:
-        return None
-
 @router.post("/signup", response_model=TokenResponse)
-async def signup(payload: SignupRequest):
-    db = await try_get_db()
-    users = await get_users_collection(db)
-
-    if users is None:
-        # In-memory
-        if payload.email in USERS_MEM:
-            raise HTTPException(status_code=400, detail="Email already registered")
-        user_id = "u_" + uuid.uuid4().hex[:12]
-        USERS_MEM[payload.email] = {
-            "id": user_id,
-            "email": payload.email,
-            "passwordHash": hash_password(payload.password),
-        }
-        token = create_access_token(user_id)
-        return TokenResponse(token=token)
-
-    # With Mongo
-    existing = users.find_one({"email": payload.email})
+async def signup(payload: SignupRequest, session: Session = Depends(get_session)):
+    existing = session.query(User).filter(User.email == payload.email).first()
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
     user_id = "u_" + uuid.uuid4().hex[:12]
-    doc = {
-        "id": user_id,
-        "email": payload.email,
-        "passwordHash": hash_password(payload.password),
-    }
-    users.insert_one(doc)
+    user = User(id=user_id, email=payload.email, passwordHash=hash_password(payload.password))
+    session.add(user)
+    session.commit()
     token = create_access_token(user_id)
     return TokenResponse(token=token)
 
 @router.post("/login", response_model=TokenResponse)
-async def login(payload: LoginRequest):
-    db = await try_get_db()
-    users = await get_users_collection(db)
-
-    if users is None:
-        user = USERS_MEM.get(payload.email)
-        if not user or not verify_password(payload.password, user["passwordHash"]):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-        token = create_access_token(user["id"])  # sub is userId
-        return TokenResponse(token=token)
-
-    user = users.find_one({"email": payload.email})
-    if not user or not verify_password(payload.password, user.get("passwordHash", "")):
+async def login(payload: LoginRequest, session: Session = Depends(get_session)):
+    user = session.query(User).filter(User.email == payload.email).first()
+    if not user or not verify_password(payload.password, user.passwordHash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-    # Ensure JWT subject is a string; Mongo _id may be an ObjectId
-    subject = user.get("id") or user.get("_id")
-    token = create_access_token(str(subject))
+    token = create_access_token(user.id)
     return TokenResponse(token=token)

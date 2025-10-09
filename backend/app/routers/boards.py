@@ -3,315 +3,198 @@ from ..schemas import Board, ReorderRequest, CreateCardRequest
 from ..deps import get_current_user
 from typing import Dict, Any
 import uuid
-from ..db import get_db
-from pymongo.database import Database
+from sqlalchemy.orm import Session
+from ..sql import get_session, Board as ORMBoard, Column as ORMColumn, Card as ORMCard, Folder as ORMFolder
 
 router = APIRouter(prefix="/boards", tags=["boards"]) 
 
-# In-memory default board per user when DB not configured
-BOARDS_MEM: Dict[str, Dict[str, Any]] = {}
+def board_to_dict(session: Session, board: ORMBoard) -> Dict[str, Any]:
+    columns = (
+        session.query(ORMColumn)
+        .filter(ORMColumn.boardId == board.id)
+        .order_by(ORMColumn.position.asc())
+        .all()
+    )
+    cards = (
+        session.query(ORMCard)
+        .filter(ORMCard.boardId == board.id)
+        .order_by(ORMCard.position.asc())
+        .all()
+    )
+    folders = (
+        session.query(ORMFolder)
+        .filter(ORMFolder.boardId == board.id)
+        .all()
+    )
+    return {
+        "_id": board.id,
+        "userId": board.userId,
+        "title": board.title,
+        "columns": [{"_id": c.id, "title": c.title, "position": c.position} for c in columns],
+        "cards": [
+            {
+                "_id": c.id,
+                "boardId": c.boardId,
+                "columnId": c.columnId,
+                "content": c.content,
+                "position": c.position,
+                **({"folderId": c.folderId} if c.folderId else {}),
+            }
+            for c in cards
+        ],
+        "folders": [{"_id": f.id, "name": f.name, "color": f.color} for f in folders],
+    }
 
-def default_board_for(user_id: str) -> Dict[str, Any]:
-    if user_id not in BOARDS_MEM:
-        board_id = "board_" + user_id
-        columns = [
-            {"_id": "col_ideas", "title": "Ideas", "position": 0},
-        ]
-        BOARDS_MEM[user_id] = {
-            "_id": board_id,
-            "userId": user_id,
-            "title": "My Brainstorm Board",
-            "columns": columns,
-            "cards": [],
-            "folders": [],
-        }
-    return BOARDS_MEM[user_id]
-
-async def try_get_db() -> Database | None:
-    try:
-        return await get_db()
-    except Exception:
-        return None
-
-def get_or_create_board_db(db: Database, user_id: str) -> Dict[str, Any]:
-    boards = db["boards"]
+def ensure_user_board(session: Session, user_id: str) -> ORMBoard:
     board_id = f"board_{user_id}"
-    doc = boards.find_one({"_id": board_id})
-    if not doc:
-        doc = {
-            "_id": board_id,
-            "userId": user_id,
-            "title": "My Brainstorm Board",
-            "columns": [
-                {"_id": "col_ideas", "title": "Ideas", "position": 0},
-            ],
-            "cards": [],
-            "folders": [],
-        }
-        boards.insert_one(doc)
-    # Migrate any existing boards to single "Ideas" column
-    else:
-        cols = doc.get("columns", [])
-        if not (len(cols) == 1 and cols[0].get("_id") == "col_ideas"):
-            doc["columns"] = [{"_id": "col_ideas", "title": "Ideas", "position": 0}]
-            cards = doc.get("cards", [])
-            # Move all cards to ideas with reindexed positions
-            cards_sorted = sorted(cards, key=lambda c: c.get("position", 0))
-            for i, c in enumerate(cards_sorted):
-                c["columnId"] = "col_ideas"
-                c["position"] = i
-            doc["cards"] = cards_sorted
-            boards.update_one({"_id": board_id}, {"$set": {"columns": doc["columns"], "cards": doc["cards"]}})
-    return doc
+    board = session.query(ORMBoard).filter(ORMBoard.id == board_id).first()
+    if not board:
+        board = ORMBoard(id=board_id, userId=user_id, title="My Brainstorm Board")
+        session.add(board)
+        # Create default Ideas column
+        session.flush()
+        col = ORMColumn(id="col_ideas", boardId=board.id, title="Ideas", position=0)
+        session.add(col)
+        session.commit()
+    # Ensure there is exactly one Ideas column and migrate cards if needed is not necessary in fresh SQL schema
+    return board
 
 @router.get("/me", response_model=Board, response_model_by_alias=True)
-async def get_my_board(user=Depends(get_current_user)):
-    # Prefer Mongo if configured
-    db = await try_get_db()
-    if db is not None:
-        doc = get_or_create_board_db(db, user["userId"])  # type: ignore
-        return doc
-    # Fallback to in-memory
-    return default_board_for(user["userId"])  # type: ignore
+async def get_my_board(user=Depends(get_current_user), session: Session = Depends(get_session)):
+    board = ensure_user_board(session, user["userId"])  # type: ignore
+    return board_to_dict(session, board)
 
 @router.post("/{boardId}/reorder")
-async def reorder(boardId: str, payload: ReorderRequest, user=Depends(get_current_user)):
-    db = await try_get_db()
-    if db is not None:
-        boards = db["boards"]
-        doc = boards.find_one({"_id": boardId, "userId": user["userId"]})
-        if not doc:
-            return {"status": "error", "detail": "Board not found"}
-        cards = doc.get("cards", [])
-        # find the card and update its columnId if moved
-        card = next((c for c in cards if c.get("_id") == payload.draggableId), None)
-        if not card:
-            return {"status": "error", "detail": "Card not found"}
-        src_col = payload.source.droppableId
-        dst_col = payload.destination.droppableId
-        if card.get("columnId") != dst_col:
-            card["columnId"] = dst_col
-        # recompute positions within both affected columns
-        def sort_and_reindex(col_id: str):
-            col_cards = [c for c in cards if c.get("columnId") == col_id]
-            # place dragged card at destination index if this is dst col
-            if col_id == dst_col:
-                # remove if exists to avoid duplication
-                col_cards = [c for c in col_cards if c.get("_id") != payload.draggableId]
-                col_cards.insert(payload.destination.index, card)
-            # simple reindex
-            for i, c in enumerate(sorted(col_cards, key=lambda x: x.get("position", 0))):
-                c["position"] = i
-        sort_and_reindex(src_col)
-        if dst_col != src_col:
-            sort_and_reindex(dst_col)
-        boards.update_one({"_id": boardId}, {"$set": {"cards": cards}})
-        return {"status": "ok"}
+async def reorder(boardId: str, payload: ReorderRequest, user=Depends(get_current_user), session: Session = Depends(get_session)):
+    board = session.query(ORMBoard).filter(ORMBoard.id == boardId, ORMBoard.userId == user["userId"]).first()  # type: ignore
+    if not board:
+        return {"status": "error", "detail": "Board not found"}
+    card = session.query(ORMCard).filter(ORMCard.id == payload.draggableId, ORMCard.boardId == boardId).first()
+    if not card:
+        return {"status": "error", "detail": "Card not found"}
+    src_col = payload.source.droppableId
+    dst_col = payload.destination.droppableId
+    if card.columnId != dst_col:
+        card.columnId = dst_col
+    # Reorder within affected columns
+    def reindex(col_id: str):
+        col_cards = (
+            session.query(ORMCard)
+            .filter(ORMCard.boardId == boardId, ORMCard.columnId == col_id)
+            .order_by(ORMCard.position.asc())
+            .all()
+        )
+        # For destination, insert the dragged card at index
+        if col_id == dst_col:
+            col_cards = [c for c in col_cards if c.id != card.id]
+            col_cards.insert(payload.destination.index, card)
+        for i, c in enumerate(col_cards):
+            c.position = i
+    reindex(src_col)
+    if dst_col != src_col:
+        reindex(dst_col)
+    session.commit()
+    return {"status": "ok"}
 
-# --- New: Folder update/delete ---
+# --- Folder update/delete ---
 @router.patch("/{boardId}/folders/{folderId}")
-async def update_folder(boardId: str, folderId: str, payload: dict, user=Depends(get_current_user)):
-    """Rename or recolor a folder."""
-    db = await try_get_db()
+async def update_folder(boardId: str, folderId: str, payload: dict, user=Depends(get_current_user), session: Session = Depends(get_session)):
     name = payload.get("name")
     color = payload.get("color")
-    if db is not None:
-        boards = db["boards"]
-        doc = boards.find_one({"_id": boardId, "userId": user["userId"]})
-        if not doc:
-            return {"status": "error", "detail": "Board not found"}
-        folders = doc.get("folders", [])
-        for f in folders:
-            if f.get("_id") == folderId:
-                if name is not None:
-                    f["name"] = name
-                if color is not None:
-                    f["color"] = color
-                break
-        boards.update_one({"_id": boardId}, {"$set": {"folders": folders}})
-        return {"status": "ok"}
-    # In-memory fallback
-    board = default_board_for(user["userId"])  # type: ignore
-    if board["_id"] != boardId:
+    board = session.query(ORMBoard).filter(ORMBoard.id == boardId, ORMBoard.userId == user["userId"]).first()  # type: ignore
+    if not board:
         return {"status": "error", "detail": "Board not found"}
-    for f in board.setdefault("folders", []):
-        if f["_id"] == folderId:
-            if name is not None:
-                f["name"] = name
-            if color is not None:
-                f["color"] = color
-            break
+    folder = session.query(ORMFolder).filter(ORMFolder.id == folderId, ORMFolder.boardId == boardId).first()
+    if not folder:
+        return {"status": "error", "detail": "Folder not found"}
+    if name is not None:
+        folder.name = name
+    if color is not None:
+        folder.color = color
+    session.commit()
     return {"status": "ok"}
 
 @router.delete("/{boardId}/folders/{folderId}")
-async def delete_folder(boardId: str, folderId: str, user=Depends(get_current_user)):
-    """Delete a folder and unset folderId for its cards."""
-    db = await try_get_db()
-    if db is not None:
-        boards = db["boards"]
-        doc = boards.find_one({"_id": boardId, "userId": user["userId"]})
-        if not doc:
-            return {"status": "error", "detail": "Board not found"}
-        folders = [f for f in doc.get("folders", []) if f.get("_id") != folderId]
-        cards = doc.get("cards", [])
-        for c in cards:
-            if c.get("folderId") == folderId:
-                c.pop("folderId", None)
-        boards.update_one({"_id": boardId}, {"$set": {"folders": folders, "cards": cards}})
-        return {"status": "ok"}
-    # In-memory fallback
-    board = default_board_for(user["userId"])  # type: ignore
-    if board["_id"] != boardId:
+async def delete_folder(boardId: str, folderId: str, user=Depends(get_current_user), session: Session = Depends(get_session)):
+    board = session.query(ORMBoard).filter(ORMBoard.id == boardId, ORMBoard.userId == user["userId"]).first()  # type: ignore
+    if not board:
         return {"status": "error", "detail": "Board not found"}
-    board["folders"] = [f for f in board.get("folders", []) if f["_id"] != folderId]
-    for c in board.get("cards", []):
-        if c.get("folderId") == folderId:
-            c.pop("folderId", None)
+    # Unset folderId from cards, then delete folder
+    session.query(ORMCard).filter(ORMCard.boardId == boardId, ORMCard.folderId == folderId).update({ORMCard.folderId: None})
+    deleted = session.query(ORMFolder).filter(ORMFolder.id == folderId, ORMFolder.boardId == boardId).delete()
+    session.commit()
+    if not deleted:
+        return {"status": "error", "detail": "Folder not found"}
     return {"status": "ok"}
 
-# --- New: Card update/delete ---
+# --- Card update/delete ---
 @router.patch("/{boardId}/cards/{cardId}")
-async def update_card(boardId: str, cardId: str, payload: dict, user=Depends(get_current_user)):
-    """Update card content (and optionally folder assignment)."""
-    db = await try_get_db()
+async def update_card(boardId: str, cardId: str, payload: dict, user=Depends(get_current_user), session: Session = Depends(get_session)):
     content = payload.get("content")
     folderId = payload.get("folderId") if "folderId" in payload else None
-    if db is not None:
-        boards = db["boards"]
-        doc = boards.find_one({"_id": boardId, "userId": user["userId"]})
-        if not doc:
-            return {"status": "error", "detail": "Board not found"}
-        cards = doc.get("cards", [])
-        for c in cards:
-            if c.get("_id") == cardId:
-                if content is not None:
-                    c["content"] = content
-                if "folderId" in payload:
-                    if folderId:
-                        c["folderId"] = folderId
-                    else:
-                        c.pop("folderId", None)
-                break
-        boards.update_one({"_id": boardId}, {"$set": {"cards": cards}})
-        return {"status": "ok"}
-    # In-memory fallback
-    board = default_board_for(user["userId"])  # type: ignore
-    if board["_id"] != boardId:
+    board = session.query(ORMBoard).filter(ORMBoard.id == boardId, ORMBoard.userId == user["userId"]).first()  # type: ignore
+    if not board:
         return {"status": "error", "detail": "Board not found"}
-    for c in board.get("cards", []):
-        if c["_id"] == cardId:
-            if content is not None:
-                c["content"] = content
-            if "folderId" in payload:
-                if folderId:
-                    c["folderId"] = folderId
-                else:
-                    c.pop("folderId", None)
-            break
+    card = session.query(ORMCard).filter(ORMCard.id == cardId, ORMCard.boardId == boardId).first()
+    if not card:
+        return {"status": "error", "detail": "Card not found"}
+    if content is not None:
+        card.content = content
+    if "folderId" in payload:
+        card.folderId = folderId if folderId else None
+    session.commit()
     return {"status": "ok"}
 
 @router.delete("/{boardId}/cards/{cardId}")
-async def delete_card(boardId: str, cardId: str, user=Depends(get_current_user)):
-    """Delete a card from the board."""
-    db = await try_get_db()
-    if db is not None:
-        boards = db["boards"]
-        doc = boards.find_one({"_id": boardId, "userId": user["userId"]})
-        if not doc:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Board not found")
-        cards = doc.get("cards", [])
-        if not any(c.get("_id") == cardId for c in cards):
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Card not found")
-        cards = [c for c in cards if c.get("_id") != cardId]
-        boards.update_one({"_id": boardId}, {"$set": {"cards": cards}})
-        return {"status": "ok"}
-    # In-memory fallback
-    board = default_board_for(user["userId"])  # type: ignore
-    if board["_id"] != boardId:
+async def delete_card(boardId: str, cardId: str, user=Depends(get_current_user), session: Session = Depends(get_session)):
+    board = session.query(ORMBoard).filter(ORMBoard.id == boardId, ORMBoard.userId == user["userId"]).first()  # type: ignore
+    if not board:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Board not found")
-    if not any(c.get("_id") == cardId for c in board.get("cards", [])):
+    deleted = session.query(ORMCard).filter(ORMCard.id == cardId, ORMCard.boardId == boardId).delete()
+    if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Card not found")
-    board["cards"] = [c for c in board.get("cards", []) if c["_id"] != cardId]
+    session.commit()
     return {"status": "ok"}
 
 @router.post("/{boardId}/cards")
-async def create_card(boardId: str, payload: CreateCardRequest, user=Depends(get_current_user)):
-    db = await try_get_db()
-    if db is not None:
-        boards = db["boards"]
-        doc = boards.find_one({"_id": boardId, "userId": user["userId"]})
-        if not doc:
-            return {"status": "error", "detail": "Board not found"}
-        cards = doc.get("cards", [])
-        next_pos = max([c.get("position", 0) for c in cards if c.get("columnId") == payload.columnId], default=-1) + 1
-        new_card = {
-            "_id": "card_" + uuid.uuid4().hex[:8],
-            "boardId": boardId,
-            "columnId": payload.columnId,
-            "content": payload.content,
-            "position": next_pos,
-        }
-        cards.append(new_card)
-        boards.update_one({"_id": boardId}, {"$set": {"cards": cards}})
-        return {"status": "ok", "card": new_card}
-    # In-memory fallback
-    board = default_board_for(user["userId"])  # type: ignore
-    if board["_id"] != boardId:
+async def create_card(boardId: str, payload: CreateCardRequest, user=Depends(get_current_user), session: Session = Depends(get_session)):
+    board = session.query(ORMBoard).filter(ORMBoard.id == boardId, ORMBoard.userId == user["userId"]).first()  # type: ignore
+    if not board:
         return {"status": "error", "detail": "Board not found"}
-    cards = [c for c in board["cards"] if c["columnId"] == payload.columnId]
-    next_pos = max([c.get("position", 0) for c in cards], default=-1) + 1
-    new_card = {
-        "_id": "card_" + uuid.uuid4().hex[:8],
-        "boardId": boardId,
-        "columnId": payload.columnId,
-        "content": payload.content,
-        "position": next_pos,
-    }
-    board["cards"].append(new_card)
-    return {"status": "ok", "card": new_card}
+    # Next position within the given column
+    max_pos = session.query(ORMCard).filter(ORMCard.boardId == boardId, ORMCard.columnId == payload.columnId).order_by(ORMCard.position.desc()).first()
+    next_pos = (max_pos.position + 1) if max_pos else 0
+    new_id = "card_" + uuid.uuid4().hex[:8]
+    new_card = ORMCard(id=new_id, boardId=boardId, columnId=payload.columnId, content=payload.content, position=next_pos)
+    session.add(new_card)
+    session.commit()
+    return {"status": "ok", "card": {"_id": new_card.id, "boardId": new_card.boardId, "columnId": new_card.columnId, "content": new_card.content, "position": new_card.position}}
 
 @router.post("/{boardId}/folders")
-async def create_folder(boardId: str, payload: dict, user=Depends(get_current_user)):
-    db = await try_get_db()
+async def create_folder(boardId: str, payload: dict, user=Depends(get_current_user), session: Session = Depends(get_session)):
     name = payload.get("name") or "Folder"
     color = payload.get("color") or "#8b5cf6"
-    new_folder = {"_id": "fld_" + uuid.uuid4().hex[:6], "name": name, "color": color}
-    if db is not None:
-        boards = db["boards"]
-        doc = boards.find_one({"_id": boardId, "userId": user["userId"]})
-        if not doc:
-            return {"status": "error", "detail": "Board not found"}
-        folders = doc.get("folders", [])
-        folders.append(new_folder)
-        boards.update_one({"_id": boardId}, {"$set": {"folders": folders}})
-        return {"status": "ok", "folder": new_folder}
-    # In-memory fallback
-    board = default_board_for(user["userId"])  # type: ignore
-    if board["_id"] != boardId:
+    board = session.query(ORMBoard).filter(ORMBoard.id == boardId, ORMBoard.userId == user["userId"]).first()  # type: ignore
+    if not board:
         return {"status": "error", "detail": "Board not found"}
-    board.setdefault("folders", []).append(new_folder)
-    return {"status": "ok", "folder": new_folder}
+    new_id = "fld_" + uuid.uuid4().hex[:6]
+    folder = ORMFolder(id=new_id, boardId=boardId, name=name, color=color)
+    session.add(folder)
+    session.commit()
+    return {"status": "ok", "folder": {"_id": folder.id, "name": folder.name, "color": folder.color}}
 
 @router.post("/{boardId}/folders/{folderId}/assign")
-async def assign_cards_to_folder(boardId: str, folderId: str, payload: dict, user=Depends(get_current_user)):
-    db = await try_get_db()
+async def assign_cards_to_folder(boardId: str, folderId: str, payload: dict, user=Depends(get_current_user), session: Session = Depends(get_session)):
     card_ids = payload.get("cardIds", [])
-    if db is not None:
-        boards = db["boards"]
-        doc = boards.find_one({"_id": boardId, "userId": user["userId"]})
-        if not doc:
-            return {"status": "error", "detail": "Board not found"}
-        cards = doc.get("cards", [])
-        for c in cards:
-            if c.get("_id") in card_ids:
-                c["folderId"] = folderId
-        boards.update_one({"_id": boardId}, {"$set": {"cards": cards}})
-        return {"status": "ok"}
-    # In-memory fallback
-    board = default_board_for(user["userId"])  # type: ignore
-    if board["_id"] != boardId:
+    board = session.query(ORMBoard).filter(ORMBoard.id == boardId, ORMBoard.userId == user["userId"]).first()  # type: ignore
+    if not board:
         return {"status": "error", "detail": "Board not found"}
-    for c in board["cards"]:
-        if c["_id"] in card_ids:
-            c["folderId"] = folderId
+    cards = (
+        session.query(ORMCard)
+        .filter(ORMCard.boardId == boardId, ORMCard.id.in_(card_ids))
+        .all()
+    )
+    for c in cards:
+        c.folderId = folderId
+    session.commit()
     return {"status": "ok"}

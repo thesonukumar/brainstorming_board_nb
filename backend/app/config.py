@@ -5,10 +5,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 PORT = int(os.getenv("PORT", "8000"))
+
 CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",") if o.strip()]
 
 MONGODB_URI = os.getenv("MONGODB_URI", "")
 MONGODB_DB = os.getenv("MONGODB_DB", "brainstorm_board")
+
+# SQLite database URL (SQLAlchemy). Example: sqlite:///./brainstorm.db
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./brainstorm.db")
 
 JWT_SECRET = os.getenv("JWT_SECRET", "change_me")
 JWT_ALG = os.getenv("JWT_ALG", "HS256")

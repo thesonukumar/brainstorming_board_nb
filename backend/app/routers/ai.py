@@ -3,9 +3,11 @@ from typing import Optional
 
 import logging
 import anyio
+from sqlalchemy.orm import Session
 from ..deps import get_current_user
 from ..schemas import SummaryResponse, SummarizeRequest
-from .boards import default_board_for, try_get_db, get_or_create_board_db
+from .boards import board_to_dict, ensure_user_board
+from ..sql import get_session
 from ..config import GEMINI_API_KEY, TEXT_MODEL
 
 router = APIRouter(prefix="/ai", tags=["ai"]) 
@@ -17,6 +19,7 @@ async def summarize_board(
     payload: Optional[SummarizeRequest] = Body(default=None),
     folder_id: Optional[str] = Query(default=None),
     user=Depends(get_current_user),
+    session: Session = Depends(get_session),
 ):
     """
     Summarize the cards in a board (optionally filtered by folder).
@@ -27,8 +30,8 @@ async def summarize_board(
     if "@" in board_id or "%40" in board_id:
         board_id = f"board_{user['userId']}"
 
-    # Load board (MongoDB first, fallback to in-memory)
-    board = await _load_board(board_id, user["userId"])
+    # Load board from SQLite
+    board = _load_board(board_id, user["userId"], session)  # type: ignore
 
     # Determine folder selection
     selected_folder = (payload.folderId if payload else None) or folder_id
@@ -49,17 +52,12 @@ async def summarize_board(
     return SummaryResponse(summary=_stub_summary(cards))
 
 
-async def _load_board(board_id: str, user_id: str) -> dict:
-    """Load board from MongoDB if available, otherwise fallback to default."""
-    db = await try_get_db()
-    if db is not None:
-        boards = db["boards"]
-        board = boards.find_one({"_id": board_id, "userId": user_id})
-        if not board:
-            board = get_or_create_board_db(db, user_id)  # type: ignore
-    else:
-        board = default_board_for(user_id)  # type: ignore
-    return board
+def _load_board(board_id: str, user_id: str, session: Session) -> dict:
+    # Normalize: if requested board doesn't belong to user, ensure user's board
+    if not board_id.startswith("board_"):
+        board_id = f"board_{user_id}"
+    board = ensure_user_board(session, user_id)
+    return board_to_dict(session, board)
 
 
 def _filter_cards(cards: list, folder_id: Optional[str]) -> list:
