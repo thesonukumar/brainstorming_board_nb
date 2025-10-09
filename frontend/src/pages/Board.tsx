@@ -238,7 +238,7 @@ export default function Board() {
                               {card.folderId && (
                                 <div className="text-[11px] text-gray-500 mt-1">Cluster: {folders.find((f:any)=>f._id===card.folderId)?.name || card.folderId}</div>
                               )}
-                              <div className="absolute top-2 right-2 flex gap-1 opacity-0 hover:opacity-100 transition">
+                              <div className="absolute top-2 right-2 flex gap-1">
                                 <button className="text-xs px-2 py-1 rounded border bg-white hover:bg-red-50 text-red-600" onClick={(e)=>{ e.stopPropagation(); deleteCardMutation.mutate(card._id) }}>Delete</button>
                               </div>
                             </div>

@@ -2,14 +2,10 @@ import os
 from datetime import timedelta
 from dotenv import load_dotenv
 
-load_dotenv()
 
 PORT = int(os.getenv("PORT", "8000"))
 
 CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",") if o.strip()]
-
-MONGODB_URI = os.getenv("MONGODB_URI", "")
-MONGODB_DB = os.getenv("MONGODB_DB", "brainstorm_board")
 
 # SQLite database URL (SQLAlchemy). Example: sqlite:///./brainstorm.db
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./brainstorm.db")
