@@ -15,9 +15,7 @@ def default_board_for(user_id: str) -> Dict[str, Any]:
     if user_id not in BOARDS_MEM:
         board_id = "board_" + user_id
         columns = [
-            {"_id": "col_todo", "title": "To Do", "position": 0},
-            {"_id": "col_doing", "title": "Doing", "position": 1},
-            {"_id": "col_done", "title": "Done", "position": 2},
+            {"_id": "col_ideas", "title": "Ideas", "position": 0},
         ]
         BOARDS_MEM[user_id] = {
             "_id": board_id,
@@ -45,14 +43,25 @@ async def get_or_create_board_db(db: AsyncIOMotorDatabase, user_id: str) -> Dict
             "userId": user_id,
             "title": "My Brainstorm Board",
             "columns": [
-                {"_id": "col_todo", "title": "To Do", "position": 0},
-                {"_id": "col_doing", "title": "Doing", "position": 1},
-                {"_id": "col_done", "title": "Done", "position": 2},
+                {"_id": "col_ideas", "title": "Ideas", "position": 0},
             ],
             "cards": [],
             "folders": [],
         }
         await boards.insert_one(doc)
+    # Migrate any existing boards to single "Ideas" column
+    else:
+        cols = doc.get("columns", [])
+        if not (len(cols) == 1 and cols[0].get("_id") == "col_ideas"):
+            doc["columns"] = [{"_id": "col_ideas", "title": "Ideas", "position": 0}]
+            cards = doc.get("cards", [])
+            # Move all cards to ideas with reindexed positions
+            cards_sorted = sorted(cards, key=lambda c: c.get("position", 0))
+            for i, c in enumerate(cards_sorted):
+                c["columnId"] = "col_ideas"
+                c["position"] = i
+            doc["cards"] = cards_sorted
+            await boards.update_one({"_id": board_id}, {"$set": {"columns": doc["columns"], "cards": doc["cards"]}})
     return doc
 
 @router.get("/me", response_model=Board, response_model_by_alias=True)
