@@ -1,7 +1,7 @@
 # AI-Powered Brainstorming Board (FastAPI + React)
 
 Deployed 
-https://brainstorming-board-nb-1.onrender.com/login
+https://brainstorming-board-nb-1.onrender.com
 
 #A Trello-like brainstorming board with AI-powered suggestions, clustering, and summarization.
 
