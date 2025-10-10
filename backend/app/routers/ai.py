@@ -56,7 +56,6 @@ async def summarize_board(
     print(GEMINI_API_KEY)
     print(cards)
 
-    return SummaryResponse(summary="Hello")
     return SummaryResponse(summary=_stub_summary(cards))
 
 
