@@ -15,6 +15,6 @@ JWT_ALG = os.getenv("JWT_ALG", "HS256")
 JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "43200"))
 JWT_EXPIRE_DELTA = timedelta(minutes=JWT_EXPIRE_MINUTES)
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 EMBEDDINGS_MODEL = os.getenv("EMBEDDINGS_MODEL", "text-embedding-004")
 TEXT_MODEL = os.getenv("TEXT_MODEL", "gemini-1.5-flash")

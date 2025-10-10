@@ -8,8 +8,10 @@ from ..deps import get_current_user
 from ..schemas import SummaryResponse, SummarizeRequest
 from .boards import board_to_dict, ensure_user_board
 from ..sql import get_session
-from ..config import GEMINI_API_KEY, TEXT_MODEL
-
+# from ..config import GEMINI_API_KEY, TEXT_MODEL
+from dotenv import load_dotenv
+load_dotenv()
+GEMINI_API_KEY="AIzaSyCPpK9hrnJKFfinvKKvP7G0O5-tpphxnD4"
 router = APIRouter(prefix="/ai", tags=["ai"]) 
 logger = logging.getLogger("ai")
 
@@ -44,11 +46,17 @@ async def summarize_board(
 
     # Attempt Gemini summarization if API key and cards exist
     if GEMINI_API_KEY and cards:
+        print(GEMINI_API_KEY)
+        print(cards)
         gemini_summary = await _summarize_with_gemini(cards)
         if gemini_summary:
             return SummaryResponse(summary=gemini_summary)
 
     # Fallback summary
+    print(GEMINI_API_KEY)
+    print(cards)
+
+    return SummaryResponse(summary="Hello")
     return SummaryResponse(summary=_stub_summary(cards))
 
 
@@ -90,6 +98,7 @@ async def _summarize_with_gemini(cards: list) -> Optional[str]:
         model = genai.GenerativeModel(model_name)
         # Run blocking SDK call in a worker thread (SDK is sync)
         response = await anyio.to_thread.run_sync(model.generate_content, prompt)
+        print(response)
         text = getattr(response, "text", "") or ""
         if text:
             logger.info("Gemini summary length=%d", len(text))
