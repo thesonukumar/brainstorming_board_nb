@@ -1,6 +1,6 @@
 # AI-Powered Brainstorming Board (FastAPI + React)
 ##https://brainstorming-board-nb-1.onrender.com/login
-A Trello-like brainstorming board with AI-powered suggestions, clustering, and summarization.
+#A Trello-like brainstorming board with AI-powered suggestions, clustering, and summarization.
 
 ## Stack
 - Frontend: React (Vite + TypeScript) + TailwindCSS + @hello-pangea/dnd + TanStack Query
