@@ -19,7 +19,15 @@ export default function Signup() {
       setToken(data.token)
       nav('/')
     } catch (e: any) {
-      setError(e.response?.data?.detail || 'Signup failed')
+      let errMsg = 'Signup failed'
+      if (e.response?.data?.detail) {
+        if (Array.isArray(e.response.data.detail)) {
+          errMsg = e.response.data.detail[0].msg
+        } else if (typeof e.response.data.detail === 'string') {
+          errMsg = e.response.data.detail
+        }
+      }
+      setError(errMsg)
     } finally { setLoading(false) }
   }
 
