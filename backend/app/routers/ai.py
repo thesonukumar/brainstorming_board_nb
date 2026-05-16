@@ -8,10 +8,7 @@ from ..deps import get_current_user
 from ..schemas import SummaryResponse, SummarizeRequest
 from .boards import board_to_dict, ensure_user_board
 from ..sql import get_session
-# from ..config import GEMINI_API_KEY, TEXT_MODEL
-from dotenv import load_dotenv
-load_dotenv()
-GEMINI_API_KEY="AIzaSyCPpK9hrnJKFfinvKKvP7G0O5-tpphxnD4"
+from ..config import GEMINI_API_KEY, TEXT_MODEL
 router = APIRouter(prefix="/ai", tags=["ai"]) 
 logger = logging.getLogger("ai")
 
@@ -46,15 +43,13 @@ async def summarize_board(
 
     # Attempt Gemini summarization if API key and cards exist
     if GEMINI_API_KEY and cards:
-        print(GEMINI_API_KEY)
-        print(cards)
+
         gemini_summary = await _summarize_with_gemini(cards)
         if gemini_summary:
             return SummaryResponse(summary=gemini_summary)
 
     # Fallback summary
-    print(GEMINI_API_KEY)
-    print(cards)
+
 
     return SummaryResponse(summary=_stub_summary(cards))
 
@@ -81,9 +76,9 @@ async def _summarize_with_gemini(cards: list) -> Optional[str]:
             """
             You will be provided with a list of brainstorming ideas. 
             You have to do:
-            - Provide 2-3 new related idea suggestions based on the provided ones. (HEADING: Seggestions)
-            - Give a grouped abstartact name for the ideas. Like a title for the provided ideas. (HEADING: Title)
-            - Provide a 2-3 line sumamry for the provided ideas (Key themes, top ideas, next steps). (HEADING: Summary)
+            - Provide 2-3 new related idea suggestions based on the provided ones. (HEADING: Suggestions)
+            - Give a grouped abstract name for the ideas. Like a title for the provided ideas. (HEADING: Title)
+            - Provide a 2-3 line summary for the provided ideas (Key themes, top ideas, next steps). (HEADING: Summary)
             
             DO NOT USE MARKDOWN.\n\n
             """
@@ -92,12 +87,12 @@ async def _summarize_with_gemini(cards: list) -> Optional[str]:
         # Use google-generativeai SDK
         import google.generativeai as genai  # type: ignore
 
-        model_name = "gemini-2.5-flash-lite"
+        model_name = TEXT_MODEL
         genai.configure(api_key=GEMINI_API_KEY)
         model = genai.GenerativeModel(model_name)
         # Run blocking SDK call in a worker thread (SDK is sync)
         response = await anyio.to_thread.run_sync(model.generate_content, prompt)
-        print(response)
+
         text = getattr(response, "text", "") or ""
         if text:
             logger.info("Gemini summary length=%d", len(text))
