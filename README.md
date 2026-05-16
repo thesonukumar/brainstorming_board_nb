@@ -1,107 +1,58 @@
-# AI-Powered Brainstorming Board (FastAPI + React)
+# AI-Powered Brainstorming Board
 
-Deployed 
-https://brainstorming-board-nb-1.onrender.com
+A professional, high-usability **Traditional Kanban Board** for brainstorming, powered by FastAPI and React. Features AI-driven insights, cluster summarization, and seamless drag-and-drop.
 
-#A Trello-like brainstorming board with AI-powered suggestions, clustering, and summarization.
+## Key Features
+- **Traditional Kanban UI**: A clean, high-contrast design (Teal/Emerald theme) optimized for focus and usability.
+- **AI Insights**: Powered by **Gemini 3.1 Flash Lite** to summarize clusters and provide next-step suggestions.
+- **Robust Auth**: JWT-based authentication for secure board management.
+- **Snappy Drag & Drop**: Smooth board interactions with `@hello-pangea/dnd`.
+- **Lightweight DB**: Uses SQLite for zero-configuration local development.
 
-## Stack
-- Frontend: React (Vite + TypeScript) + TailwindCSS + @hello-pangea/dnd + TanStack Query
-- Backend: FastAPI (Python) + Uvicorn
-- Database: MongoDB Atlas (motor)
-- Auth: Email/Password with JWT (PyJWT + passlib)
-- AI: Google Gemini API (text + embeddings)
-- Deploy: Vercel (frontend) + Render (backend)
+## Tech Stack
+- **Frontend**: React (Vite, TS), TailwindCSS, TanStack Query, Lucide Icons.
+- **Backend**: FastAPI (Python 3.10+), SQLAlchemy (SQLite), Pydantic v2.
+- **AI**: Google Generative AI (Gemini SDK).
 
-## Monorepo Structure
-```
-brainstorming_board_nb/
-  frontend/
-  backend/
-  README.md
-```
+## Setup & Local Development
 
-## Requirements
-- Node.js 18+
-- Python 3.11+
-- (Optional) MongoDB Atlas URI
-- (Optional) Gemini API Key
+### 1. Backend Setup
+1. Navigate to `backend/`.
+2. Create and activate a virtual environment:
+   ```bash
+   python -m venv .venv
+   .venv\Scripts\activate
+   ```
+3. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+4. Configure environment:
+   - Copy `.env.example` to `.env`.
+   - Add your `GEMINI_API_KEY` from [Google AI Studio](https://aistudio.google.com/app/apikey).
+5. Start the server:
+   ```bash
+   uvicorn app.main:app --port 8000
+   ```
 
-## Setup
-
-### 1) Frontend
-```
-cd frontend
-npm install
-cp .env.example .env
-npm run dev
-```
-
-### 2) Backend
-```
-cd backend
-python -m venv .venv
-. .venv/Scripts/activate  # Windows PowerShell: .venv\\Scripts\\Activate.ps1
-pip install -r requirements.txt
-cp .env.example .env
-uvicorn app.main:app --reload --port 8000
-```
-
-- Backend base URL: http://localhost:8000
-- Frontend base URL: http://localhost:5173 (Vite default)
+### 2. Frontend Setup
+1. Navigate to `frontend/`.
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+3. Start the dev server:
+   ```bash
+   npm run dev
+   ```
+4. Open [http://localhost:5174](http://localhost:5174) in your browser.
 
 ## Environment Variables
 
-### frontend/.env.example
-```
-VITE_API_BASE_URL=http://localhost:8000
-```
-
-### backend/.env.example
-```
-# Server
-PORT=8000
-CORS_ORIGINS=http://localhost:5173
-
-# Mongo
-MONGODB_URI=
-MONGODB_DB=brainstorm_board
-
-# Auth
-JWT_SECRET=replace_with_strong_secret
-JWT_ALG=HS256
-JWT_EXPIRE_MINUTES=43200  # 30 days
-
-# AI
-GEMINI_API_KEY=
-EMBEDDINGS_MODEL=text-embedding-004
-TEXT_MODEL=gemini-1.5-flash
-```
-
-## Scripts
-- frontend: `npm run dev`, `npm run build`, `npm run preview`
-- backend: `uvicorn app.main:app --reload --port 8000`
-
-## Deploy
-
-### Frontend (Vercel)
-- Framework: Vite
-- Build Command: `npm run build`
-- Output: `dist`
-- Env: `VITE_API_BASE_URL` → Render backend URL
-
-### Backend (Render)
-- New Web Service
-- Runtime: Python 3.11
-- Start Command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-- Env: see `backend/.env.example`
-
-## Roadmap
-- Auth flows (signup/login) with JWT
-- CRUD for boards/columns/cards with DnD persistence
-- AI suggestions on card create
-- Embeddings + clustering + color-coded labels
-- Board summarization + sidebar
+### Backend (.env)
+- `GEMINI_API_KEY`: Your Google Gemini API Key.
+- `TEXT_MODEL`: Defaulted to `gemini-3.1-flash-lite`.
+- `JWT_SECRET`: A secret string for signing auth tokens.
 
 ## License
 MIT
